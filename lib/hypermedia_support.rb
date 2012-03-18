@@ -4,14 +4,35 @@ module HypermediaSupport
 
   require 'hypermedia_support/error'
   require 'hypermedia_support/paging_support'
+  require 'hypermedia_support/model_maker'
+  require 'hypermedia_support/model_locator'
 
   include PagingSupport
+  extend ModelMaker
+  extend ModelLocator
   extend self
 
   def with(controller, opts={})
     @@controller = controller
-    @@opts = prepare_options opts
+    @@opts = configure_opts opts
     self
+  end
+
+  def make(type, params=nil)
+    mime_type = request.format
+    format = mime_type.to_sym
+    return invalid_mime_type_response(mime_type) unless valid_mime_type? mime_type
+
+    params = scrub_params(params || request.params)
+    do_make(type, params, format)
+  end
+
+  def locate(type, id=nil)
+    mime_type = request.format
+    format = mime_type.to_sym
+    return invalid_mime_type_response(mime_type) unless valid_mime_type? mime_type
+
+    do_locate type, id || params[:id], format
   end
 
   #######
@@ -27,13 +48,23 @@ module HypermediaSupport
     controller.request
   end
 
-  def locate(type, id=nil)
-    unless valid_mime_type? request.format
-      render invalid_mime_type_response request.format
-      return
-    end
-    # TODO locate the item and return it...
+  def opts
+    @@opts
   end
+
+  def configure_opts(opts={})
+    {:invalid_mime_type_response_type => :xml}.merge(opts)
+  end
+
+  def scrub_params(params, format)
+    if params.has_key(format)
+      params = params[format]
+    end
+    params.delete "action"
+    params.delete "controller"
+    params
+  end
+
 
   # criteria: ActiveRecord::Relation, Mongoid::Criteria
   def locate_page(criteria, params=nil)
@@ -74,7 +105,13 @@ module HypermediaSupport
     controller.mimes_for_respond_to.keys.include?(mime_type.to_sym)
   end
 
+  def valid_mime_types
+    mime_types = controller.mimes_for_respond_to.keys.map do |format|
+      ActiveResource::Formats[format.to_sm].mime_type
+    end
+  end
+
   def invalid_mime_type_response(mime_type)
     # TODO include list of valid mime types in the error message
-    {mime_type.to_sym => Error.new("Invalid mime type #{mime_type.to_s}"), :status => :not_acceptable}
+    {opts[:invalid_mime_type_response_type].to_sym => Error.new("Invalid mime type #{mime_type.to_s}, acceptable types [#{valid_mime_types.join(', ')}]"), :status => :not_acceptable}
   end
